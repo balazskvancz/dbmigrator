@@ -15,6 +15,7 @@ type Config struct {
 	DriverName          string `json:"driverName"`
 	MigrationsTableName string `json:"migrationsTableName"`
 	MigrationsFilePath  string `json:"migrationsFilePath"`
+	WithTransaction     bool   `json:"withTransaction"`
 }
 
 func loadJsonConfig(path string) (*Config, error) {
@@ -41,9 +42,12 @@ func loadFromEnv() (*Config, error) {
 		drivername          = os.Getenv("DRIVER_NAME")
 		migrationsTableName = os.Getenv("MIGRATIONS_TABLE_NAME")
 		migrationsFilePath  = os.Getenv("MIGRATIONS_FILE_PATH")
+		withTransactionEnv  = os.Getenv("WITH_TRANSACTION")
 	)
 
 	cPort, _ := strconv.Atoi(port)
+
+	withTransaction := len(withTransactionEnv) > 0
 
 	return &Config{
 		Host:                host,
@@ -54,5 +58,6 @@ func loadFromEnv() (*Config, error) {
 		DriverName:          drivername,
 		MigrationsTableName: migrationsTableName,
 		MigrationsFilePath:  migrationsFilePath,
+		WithTransaction:     withTransaction,
 	}, nil
 }

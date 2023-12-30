@@ -11,6 +11,7 @@ type Database interface {
 	QueryRow(string, ...any) *sql.Row
 	GetDatabaseName() string
 	Connect() error
+	Close()
 }
 
 type database struct {
@@ -46,6 +47,7 @@ func New(c DatabaseConfig) (Database, error) {
 	return db, nil
 }
 
+// Connect tries to connect to the database given by the config.
 func (d *database) Connect() error {
 	c := d.conf
 
@@ -61,6 +63,9 @@ func (d *database) Connect() error {
 	return nil
 }
 
+// GetDatabaseName returns the name of the connected database.
 func (d *database) GetDatabaseName() string {
 	return d.conf.Database
 }
+
+func (d *database) Close() { d.DB.Close() }

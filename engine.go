@@ -17,20 +17,20 @@ const (
 var (
 	ErrNoFilePath    error = errors.New("missing migrations file path")
 	ErrBadVersioning error = errors.New("versions must follow `#vX.X.X` format")
+	ErrNothingToRun  error = errors.New("no command to run")
 )
 
 type engine struct {
 	conf         *Config
 	repositories *repositories.Repositories
+	db           database.Database
 }
 
-type parsedLines map[string][]string
-
 type Engine interface {
-	Process()
+	Process() error
 	SetupDatabase() error
 	GetLines() ([]string, error)
-	ParseLines([]string) (parsedLines, error)
+	ParseLines(lines []string) ([]Command, error)
 }
 
 // NewFromJsonConfig craetes a new instance from the config at the given path.
@@ -66,7 +66,32 @@ func New(c *Config) (Engine, error) {
 	}, nil
 }
 
-func (e *engine) Process() {
+func (e *engine) Process() error {
+	lines, err := e.GetLines()
+	if err != nil {
+		return err
+	}
+
+	commands, err := e.ParseLines(lines)
+	if err != nil {
+		return nil
+	}
+
+	latest := e.repositories.Migrations.GetLatest()
+
+	var latestVersion string
+
+	if latest != nil {
+		latestVersion = latest.Version
+	}
+
+	filteredCommands := filterCommands(latestVersion, commands)
+
+	if len(filteredCommands) == 0 {
+		return ErrNothingToRun
+	}
+
+	return runCommands(commands, e.conf.WithTransaction)
 }
 
 // SetupDatabase tries to setup the database states.
@@ -108,17 +133,15 @@ func (e *engine) GetLines() ([]string, error) {
 
 // ParseLines creates the version-commands map based upon the reead file.
 // The input represents the read lines splitted by newline.
-func (e *engine) ParseLines(lines []string) (parsedLines, error) {
+func (e *engine) ParseLines(lines []string) ([]Command, error) {
 	if lines == nil {
 		return nil, nil
 	}
 
 	var (
-		parsed = make(parsedLines, 0)
-
 		currentVersion string
 		lineStack      = make([]string, 0)
-		commandStack   = make([]string, 0)
+		commandStack   = make([]Command, 0)
 	)
 
 	for _, line := range lines {
@@ -132,7 +155,9 @@ func (e *engine) ParseLines(lines []string) (parsedLines, error) {
 			}
 
 			if len(lineStack) != 0 {
-				commandStack = append(commandStack, strings.Join(lineStack, " "))
+				query := strings.Join(lineStack, " ")
+
+				commandStack = append(commandStack, newCommand(e.db, query, currentVersion))
 
 				lineStack = lineStack[:0]
 			}
@@ -148,8 +173,6 @@ func (e *engine) ParseLines(lines []string) (parsedLines, error) {
 		// then, the accumulated stack must be
 		// put into the map with the version string.
 		if currentVersion != "" {
-			parsed[currentVersion] = commandStack
-
 			commandStack = commandStack[:0]
 			lineStack = lineStack[:0]
 		}
@@ -157,5 +180,34 @@ func (e *engine) ParseLines(lines []string) (parsedLines, error) {
 		currentVersion = spl[1]
 	}
 
-	return parsed, nil
+	return commandStack, nil
+}
+
+func filterCommands(version string, commands []Command) []Command {
+	filtered := make([]Command, 0)
+
+	for _, c := range commands {
+		if c.ShouldRun(version) {
+			filtered = append(filtered, c)
+		}
+	}
+
+	return filtered
+}
+
+func runCommands(commands []Command, withTransaction bool) error {
+	// TODO: implement transactions.
+	for _, c := range commands {
+		if err := c.Run(); err != nil {
+			// The transaction must stop at the first problem.
+			if withTransaction {
+				return err
+			}
+
+			// Othewise, only log the got error, to stdout.
+			// TODO:
+		}
+	}
+
+	return nil
 }
