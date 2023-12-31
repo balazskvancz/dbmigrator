@@ -2,6 +2,7 @@ package dbmigrator
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -45,7 +46,7 @@ func NewFromJsonConfig(path string) (Engine, error) {
 
 // New creates a new instance based upon the given config.
 func New(c *Config) (Engine, error) {
-	db, err := database.New(database.DatabaseConfig{
+	db, err := database.New(context.Background(), database.DatabaseConfig{
 		Driver:   c.DriverName,
 		Host:     c.Host,
 		Port:     c.Port,
@@ -91,7 +92,23 @@ func (e *engine) Process() error {
 		return ErrNothingToRun
 	}
 
-	return runCommands(commands, e.conf.WithTransaction)
+	if e.conf.WithTransaction {
+		if err := e.db.StartTransaction(); err != nil {
+			return err
+		}
+	}
+
+	if err := runCommands(commands, e.conf.WithTransaction); err != nil {
+		return err
+	}
+
+	if e.conf.WithTransaction {
+		if err := e.db.Commit(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // SetupDatabase tries to setup the database states.
@@ -196,7 +213,6 @@ func filterCommands(version string, commands []Command) []Command {
 }
 
 func runCommands(commands []Command, withTransaction bool) error {
-	// TODO: implement transactions.
 	for _, c := range commands {
 		if err := c.Run(); err != nil {
 			// The transaction must stop at the first problem.

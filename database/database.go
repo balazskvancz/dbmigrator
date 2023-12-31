@@ -1,8 +1,14 @@
 package database
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+)
+
+var (
+	errTxIsNil error = errors.New("no transaction to commit")
 )
 
 type Database interface {
@@ -12,11 +18,17 @@ type Database interface {
 	GetDatabaseName() string
 	Connect() error
 	Close()
+
+	StartTransaction() error
+	Commit() error
 }
 
 type database struct {
-	conf DatabaseConfig
 	*sql.DB
+
+	ctx  context.Context
+	conf DatabaseConfig
+	tx   *sql.Tx
 }
 
 const (
@@ -33,12 +45,15 @@ type DatabaseConfig struct {
 }
 
 // New returns a new instance of Database based upon the given config.
-func New(c DatabaseConfig) (Database, error) {
+func New(ctx context.Context, c DatabaseConfig) (Database, error) {
 	if c.Driver == "" {
 		c.Driver = defaultDriverName
 	}
 
-	db := &database{conf: c}
+	db := &database{
+		ctx:  ctx,
+		conf: c,
+	}
 
 	if err := db.Connect(); err != nil {
 		return nil, err
@@ -68,4 +83,52 @@ func (d *database) GetDatabaseName() string {
 	return d.conf.Database
 }
 
+// Close closes the database connection.
 func (d *database) Close() { d.DB.Close() }
+
+// Exec executes the given command with the associated values.
+// It is executed via the opened transaction, if there is any.
+func (d *database) Exec(query string, values ...any) (sql.Result, error) {
+	if d.tx != nil {
+		return d.tx.Exec(query, values...)
+	}
+	return d.Exec(query, values)
+}
+
+// Query implements query, done via the started opened transaction,
+// if there is one.
+func (d *database) Query(query string, values ...any) (*sql.Rows, error) {
+	if d.tx != nil {
+		return d.tx.Query(query, values...)
+	}
+	return d.Query(query, values...)
+}
+
+// QueryRow implements a single row query, done via the started opened transaction,
+// if there is one.
+func (d *database) QueryRow(query string, values ...any) *sql.Row {
+	if d.tx != nil {
+		return d.tx.QueryRow(query, values...)
+	}
+	return d.QueryRow(query, values...)
+}
+
+// StartTransaction tries to start a transaction on the given database connection.
+func (d *database) StartTransaction() error {
+	tx, err := d.DB.BeginTx(d.ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	d.tx = tx
+
+	return nil
+}
+
+// Commit tries to close the transaction with a commit message.
+func (d *database) Commit() error {
+	if d.tx == nil {
+		return errTxIsNil
+	}
+	return d.tx.Commit()
+}
