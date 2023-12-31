@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -16,9 +18,10 @@ const (
 )
 
 var (
-	ErrNoFilePath    error = errors.New("missing migrations file path")
-	ErrBadVersioning error = errors.New("versions must follow `#vX.X.X` format")
-	ErrNothingToRun  error = errors.New("no command to run")
+	ErrNoFilePath         error = errors.New("missing migrations file path")
+	ErrBadVersioning      error = errors.New("versions must follow `#vX.X.X` format")
+	ErrNothingToRun       error = errors.New("no command to run")
+	ErrInvalidLastVersion error = errors.New("invalid latest stored version")
 )
 
 type engine struct {
@@ -59,15 +62,21 @@ func New(c *Config) (Engine, error) {
 		return nil, err
 	}
 
-	rep := repositories.New(db)
+	rep := repositories.New(db, c.MigrationsTableName)
 
 	return &engine{
 		conf:         c,
 		repositories: rep,
+		db:           db,
 	}, nil
 }
 
 func (e *engine) Process() error {
+
+	if err := e.SetupDatabase(); err != nil {
+		return err
+	}
+
 	lines, err := e.GetLines()
 	if err != nil {
 		return err
@@ -75,15 +84,22 @@ func (e *engine) Process() error {
 
 	commands, err := e.ParseLines(lines)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	latest := e.repositories.Migrations.GetLatest()
 
-	var latestVersion string
+	var latestVersion *semver
 
 	if latest != nil {
-		latestVersion = latest.Version
+		latestSemver := newSemver(latest.Version)
+
+		// In this case the stored latest version is somehow invalid.
+		if latestSemver == nil {
+			return ErrInvalidLastVersion
+		}
+
+		latestVersion = latestSemver
 	}
 
 	filteredCommands := filterCommands(latestVersion, commands)
@@ -93,12 +109,35 @@ func (e *engine) Process() error {
 	}
 
 	if e.conf.WithTransaction {
+		fmt.Println("starting transaction")
 		if err := e.db.StartTransaction(); err != nil {
 			return err
 		}
 	}
 
 	if err := runCommands(commands, e.conf.WithTransaction); err != nil {
+		if e.conf.WithTransaction {
+			if err := e.db.Rollback(); err != nil {
+				return err
+			}
+		}
+
+		return err
+	}
+
+	// Then must save the latest version.
+	newLatestVersion := getLatestVersion(commands)
+
+	if err := e.repositories.Migrations.Insert(newLatestVersion.toString()); err != nil {
+		// If there was an error during the insertion of
+		// the new latest version, then should a rollback.
+		// However, it is only possible, if the a transaction was started.
+		if e.conf.WithTransaction {
+			if rollbackErr := e.db.Rollback(); rollbackErr != nil {
+				return rollbackErr
+			}
+		}
+
 		return err
 	}
 
@@ -156,7 +195,7 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 	}
 
 	var (
-		currentVersion string
+		currentVersion *semver
 		lineStack      = make([]string, 0)
 		commandStack   = make([]Command, 0)
 	)
@@ -165,19 +204,24 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 		if !strings.HasPrefix(line, versionProlog) {
 			// If currently read line is not empty,
 			// then it is simply pushed to the stack.
-			if line != "" {
-				lineStack = append(lineStack, line)
-
+			if line == "" {
 				continue
 			}
 
-			if len(lineStack) != 0 {
-				query := strings.Join(lineStack, " ")
+			lineStack = append(lineStack, line)
 
-				commandStack = append(commandStack, newCommand(e.db, query, currentVersion))
+			if strings.HasSuffix(strings.TrimSpace(line), ";") && len(lineStack) != 0 {
+				if currentVersion != nil && strings.HasSuffix(strings.TrimSpace(lineStack[len(lineStack)-1]), ";") {
+					query := strings.Join(lineStack, " ")
+
+					commandStack = append(commandStack, newCommand(e.db, query, currentVersion))
+				}
 
 				lineStack = lineStack[:0]
+
 			}
+
+			continue
 		}
 
 		spl := strings.Split(line, versionProlog)
@@ -189,22 +233,22 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 		// If there was a version before this iteration
 		// then, the accumulated stack must be
 		// put into the map with the version string.
-		if currentVersion != "" {
+		if currentVersion != nil {
 			commandStack = commandStack[:0]
 			lineStack = lineStack[:0]
 		}
 
-		currentVersion = spl[1]
+		currentVersion = newSemver(spl[1])
 	}
 
 	return commandStack, nil
 }
 
-func filterCommands(version string, commands []Command) []Command {
+func filterCommands(version *semver, commands []Command) []Command {
 	filtered := make([]Command, 0)
 
 	for _, c := range commands {
-		if c.ShouldRun(version) {
+		if version == nil || c.ShouldRun(version) {
 			filtered = append(filtered, c)
 		}
 	}
@@ -222,8 +266,25 @@ func runCommands(commands []Command, withTransaction bool) error {
 
 			// Othewise, only log the got error, to stdout.
 			// TODO:
+			log.Default().Printf("exec error: [%v]\n", err)
 		}
 	}
 
 	return nil
+}
+
+func getLatestVersion(commands []Command) *semver {
+	var sv *semver
+	for _, c := range commands {
+		if sv == nil {
+			sv = c.Semver()
+
+			continue
+		}
+
+		if c.Semver().greaterThan(sv) {
+			sv = c.Semver()
+		}
+	}
+	return sv
 }

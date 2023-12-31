@@ -1,23 +1,26 @@
 package dbmigrator
 
-import "github.com/balazskvancz/dbmigrator/database"
+import (
+	"github.com/balazskvancz/dbmigrator/database"
+)
 
 type command struct {
 	db      database.Database
 	query   string
-	version string
+	version *semver
 }
 
 type Command interface {
 	Run() error
-	ShouldRun(version string) bool
+	ShouldRun(*semver) bool
+	Semver() *semver
 }
 
-func newCommand(db database.Database, query string, version string) Command {
+func newCommand(db database.Database, query string, semver *semver) Command {
 	return &command{
 		db:      db,
 		query:   query,
-		version: version,
+		version: semver,
 	}
 }
 
@@ -30,11 +33,10 @@ func (c *command) Run() error {
 
 // ShouldRun returns whether a certain command should run based upon
 // the latest stored versions.
-func (c *command) ShouldRun(version string) bool {
-	if version == "" {
-		return true
-	}
+func (c *command) ShouldRun(version *semver) bool {
+	return c.version.greaterThan(version)
+}
 
-	// TODO: comparing semver.
-	return false
+func (c *command) Semver() *semver {
+	return c.version
 }

@@ -11,8 +11,13 @@ type Repositories struct {
 }
 
 // New creates an instace of the common repository holder.
-func New(db database.Database) *Repositories {
+func New(db database.Database, migrationsTableName string) *Repositories {
+	finalTableName := defaultMigrationsTableName
+	if migrationsTableName != "" {
+		finalTableName = migrationsTableName
+	}
+
 	return &Repositories{
-		Migrations: newMigrationsRepository(defaultMigrationsTableName, db),
+		Migrations: newMigrationsRepository(finalTableName, db),
 	}
 }

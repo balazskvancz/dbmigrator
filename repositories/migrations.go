@@ -2,7 +2,6 @@ package repositories
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/balazskvancz/dbmigrator/database"
 	"github.com/balazskvancz/dbmigrator/models"
@@ -31,7 +30,7 @@ func newMigrationsRepository(tableName string, db database.Database) MigrationsR
 func (mr *migrationsRepository) Insert(version string) error {
 	_, err := mr.db.Exec(fmt.Sprintf(`
 		INSERT INTO %s SET
-			version 	= ?
+			version 	= ?,
 			createdAt = NOW()
 	`, mr.tableName), version)
 
@@ -42,9 +41,8 @@ func (mr *migrationsRepository) Insert(version string) error {
 func (mr *migrationsRepository) GetLatest() *models.Migration {
 	row := mr.db.QueryRow(fmt.Sprintf(`
 		SELECT
-			id,
-			version,
-			createdAt
+		 	id,
+			version
 		FROM %s
 		ORDER BY createdAt DESC	
 		LIMIT 1
@@ -54,19 +52,17 @@ func (mr *migrationsRepository) GetLatest() *models.Migration {
 	}
 
 	var (
-		id        int64
-		version   string
-		createdAt time.Time
+		id      int64
+		version string
 	)
 
-	if err := row.Scan(&id, &version, &createdAt); err != nil {
+	if err := row.Scan(&id, &version); err != nil {
 		return nil
 	}
 
 	return &models.Migration{
-		Id:        id,
-		Version:   version,
-		CreatedAt: createdAt,
+		Id:      id,
+		Version: version,
 	}
 }
 
@@ -82,7 +78,7 @@ func (mr *migrationsRepository) DoesExists() bool {
 
 	var name string
 
-	return row.Scan(&name) != nil
+	return row.Scan(&name) == nil
 }
 
 // CreateTable creates the migrations table.

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 var (
@@ -21,6 +23,7 @@ type Database interface {
 
 	StartTransaction() error
 	Commit() error
+	Rollback() error
 }
 
 type database struct {
@@ -92,7 +95,7 @@ func (d *database) Exec(query string, values ...any) (sql.Result, error) {
 	if d.tx != nil {
 		return d.tx.Exec(query, values...)
 	}
-	return d.Exec(query, values)
+	return d.DB.Exec(query, values...)
 }
 
 // Query implements query, done via the started opened transaction,
@@ -101,7 +104,7 @@ func (d *database) Query(query string, values ...any) (*sql.Rows, error) {
 	if d.tx != nil {
 		return d.tx.Query(query, values...)
 	}
-	return d.Query(query, values...)
+	return d.DB.Query(query, values...)
 }
 
 // QueryRow implements a single row query, done via the started opened transaction,
@@ -110,7 +113,7 @@ func (d *database) QueryRow(query string, values ...any) *sql.Row {
 	if d.tx != nil {
 		return d.tx.QueryRow(query, values...)
 	}
-	return d.QueryRow(query, values...)
+	return d.DB.QueryRow(query, values...)
 }
 
 // StartTransaction tries to start a transaction on the given database connection.
@@ -131,4 +134,12 @@ func (d *database) Commit() error {
 		return errTxIsNil
 	}
 	return d.tx.Commit()
+}
+
+// Rollback rolls back all the executed SQL queries in the given transaction.
+func (d *database) Rollback() error {
+	if d.tx == nil {
+		return errTxIsNil
+	}
+	return d.tx.Rollback()
 }
