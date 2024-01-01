@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
@@ -14,7 +13,10 @@ import (
 )
 
 const (
-	versionProlog string = "#v"
+	versionProlog         string = "#v"
+	singleLineComment     string = "--"
+	multiLineCommentStart string = "/*"
+	multiLineCommentEnd   string = "*/"
 )
 
 var (
@@ -25,10 +27,25 @@ var (
 	ErrNothingToRun       error = errors.New("no command to run")
 )
 
+type Logger interface {
+	Info(string)
+	Error(string)
+}
+
 type engine struct {
+	logger Logger
+
 	conf         *Config
 	repositories *repositories.Repositories
 	db           database.Database
+}
+
+type EngineOptFunc func(*engine)
+
+func WithLogger(l Logger) EngineOptFunc {
+	return func(e *engine) {
+		e.logger = l
+	}
 }
 
 type Engine interface {
@@ -38,28 +55,33 @@ type Engine interface {
 	ParseLines(lines []string) ([]Command, error)
 }
 
+var (
+	_ Engine = (*engine)(nil)
+	_ Logger = (*engine)(nil)
+)
+
 // NewFromJsonConfig creates a new instance from the config at the given path.
-func NewFromJsonConfig(path string) (Engine, error) {
+func NewFromJsonConfig(path string, opts ...EngineOptFunc) (Engine, error) {
 	config, err := loadJsonConfig(path)
 	if err != nil {
 		return nil, err
 	}
 
-	return New(config)
+	return New(config, opts...)
 }
 
 // NewFromEnv creates a new instance based on enviromental variables.
-func NewFromEnv() (Engine, error) {
+func NewFromEnv(opts ...EngineOptFunc) (Engine, error) {
 	config, err := loadFromEnv()
 	if err != nil {
 		return nil, err
 	}
 
-	return New(config)
+	return New(config, opts...)
 }
 
 // New creates a new instance based upon the given config.
-func New(c *Config) (Engine, error) {
+func New(c *Config, opts ...EngineOptFunc) (Engine, error) {
 	if c == nil {
 		return nil, ErrConfigIsNil
 	}
@@ -78,11 +100,17 @@ func New(c *Config) (Engine, error) {
 
 	rep := repositories.New(db, c.MigrationsTableName)
 
-	return &engine{
+	e := &engine{
 		conf:         c,
 		repositories: rep,
 		db:           db,
-	}, nil
+	}
+
+	for _, o := range opts {
+		o(e)
+	}
+
+	return e, nil
 }
 
 // Process acts a bootstrapper and the main worker. It sets up
@@ -118,6 +146,12 @@ func (e *engine) Process() error {
 		latestVersion = latestSemver
 	}
 
+	if latestVersion == nil {
+		e.Info("-- no prestored migration history --")
+	} else {
+		e.Info(fmt.Sprintf("-- prestored migration version: %s", latestVersion.ToString()))
+	}
+
 	filteredCommands := filterCommands(latestVersion, commands)
 
 	if len(filteredCommands) == 0 {
@@ -125,13 +159,12 @@ func (e *engine) Process() error {
 	}
 
 	if e.conf.WithTransaction {
-		fmt.Println("starting transaction")
 		if err := e.db.StartTransaction(); err != nil {
 			return err
 		}
 	}
 
-	if err := runCommands(commands, e.conf.WithTransaction); err != nil {
+	if err := runCommands(e, commands, e.conf.WithTransaction); err != nil {
 		if e.conf.WithTransaction {
 			if err := e.db.Rollback(); err != nil {
 				return err
@@ -214,10 +247,29 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 		currentVersion Semver
 		lineStack      = make([]string, 0)
 		commandStack   = make([]Command, 0)
+
+		isInsideMultiLineComment = false
 	)
 
 	for _, line := range lines {
 		if !strings.HasPrefix(line, versionProlog) {
+			if idx := strings.Index(line, singleLineComment); idx != -1 {
+				line = line[:idx]
+			}
+
+			if idx := strings.Index(line, multiLineCommentStart); idx != -1 {
+				isInsideMultiLineComment = true
+			}
+
+			if idx := strings.Index(line, multiLineCommentEnd); idx != -1 {
+				isInsideMultiLineComment = false
+				continue
+			}
+
+			if isInsideMultiLineComment {
+				continue
+			}
+
 			// If currently read line is not empty,
 			// then it is simply pushed to the stack.
 			if line == "" {
@@ -262,6 +314,20 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 	return commandStack, nil
 }
 
+// Info
+func (e *engine) Info(line string) {
+	if e.logger != nil {
+		e.Info(line)
+	}
+}
+
+// Error
+func (e *engine) Error(line string) {
+	if e.logger != nil {
+		e.Error(line)
+	}
+}
+
 func filterCommands(version Semver, commands []Command) []Command {
 	filtered := make([]Command, 0)
 
@@ -274,7 +340,7 @@ func filterCommands(version Semver, commands []Command) []Command {
 	return filtered
 }
 
-func runCommands(commands []Command, withTransaction bool) error {
+func runCommands(logger Logger, commands []Command, withTransaction bool) error {
 	for _, c := range commands {
 		if err := c.Run(); err != nil {
 			// The transaction must stop at the first problem.
@@ -282,9 +348,7 @@ func runCommands(commands []Command, withTransaction bool) error {
 				return err
 			}
 
-			// Othewise, only log the got error, to stdout.
-			// TODO:
-			log.Default().Printf("exec error: [%v]\n", err)
+			logger.Error(fmt.Sprintf("execution error: %v", err))
 		}
 	}
 

@@ -180,6 +180,7 @@ func TestParseLines(t *testing.T) {
 			lines: []string{
 				"",
 				"#v1.1.1",
+				"-- creation of table foo",
 				"CREATE TABLE foo (",
 				"id INTEGER NOT NULL,",
 				"",
@@ -203,6 +204,9 @@ func TestParseLines(t *testing.T) {
 				"PRIMARY KEY (id)",
 				");",
 				"",
+				"/*",
+				"multiline comment example",
+				"*/",
 				"ALTER TABLE foo ADD COLUMN bar VARCHAR (10) DEFAULT NULL;",
 				"",
 				"#v1.2",
