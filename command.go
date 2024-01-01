@@ -7,16 +7,16 @@ import (
 type command struct {
 	db      database.Database
 	query   string
-	version *semver
+	version Semver
 }
 
 type Command interface {
 	Run() error
-	ShouldRun(*semver) bool
-	Semver() *semver
+	ShouldRun(Semver) bool
+	Semver() Semver
 }
 
-func newCommand(db database.Database, query string, semver *semver) Command {
+func newCommand(db database.Database, query string, semver Semver) Command {
 	return &command{
 		db:      db,
 		query:   query,
@@ -33,10 +33,10 @@ func (c *command) Run() error {
 
 // ShouldRun returns whether a certain command should run based upon
 // the latest stored versions.
-func (c *command) ShouldRun(version *semver) bool {
-	return c.version.greaterThan(version)
+func (c *command) ShouldRun(version Semver) bool {
+	return c.version.GreaterThan(version)
 }
 
-func (c *command) Semver() *semver {
+func (c *command) Semver() Semver {
 	return c.version
 }

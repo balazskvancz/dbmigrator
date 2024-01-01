@@ -18,10 +18,11 @@ const (
 )
 
 var (
-	ErrNoFilePath         error = errors.New("missing migrations file path")
 	ErrBadVersioning      error = errors.New("versions must follow `#vX.X.X` format")
-	ErrNothingToRun       error = errors.New("no command to run")
+	ErrConfigIsNil        error = errors.New("given config is <nil>")
 	ErrInvalidLastVersion error = errors.New("invalid latest stored version")
+	ErrNoFilePath         error = errors.New("missing migrations file path")
+	ErrNothingToRun       error = errors.New("no command to run")
 )
 
 type engine struct {
@@ -37,7 +38,7 @@ type Engine interface {
 	ParseLines(lines []string) ([]Command, error)
 }
 
-// NewFromJsonConfig craetes a new instance from the config at the given path.
+// NewFromJsonConfig creates a new instance from the config at the given path.
 func NewFromJsonConfig(path string) (Engine, error) {
 	config, err := loadJsonConfig(path)
 	if err != nil {
@@ -47,8 +48,22 @@ func NewFromJsonConfig(path string) (Engine, error) {
 	return New(config)
 }
 
+// NewFromEnv creates a new instance based on enviromental variables.
+func NewFromEnv() (Engine, error) {
+	config, err := loadFromEnv()
+	if err != nil {
+		return nil, err
+	}
+
+	return New(config)
+}
+
 // New creates a new instance based upon the given config.
 func New(c *Config) (Engine, error) {
+	if c == nil {
+		return nil, ErrConfigIsNil
+	}
+
 	db, err := database.New(context.Background(), database.DatabaseConfig{
 		Driver:   c.DriverName,
 		Host:     c.Host,
@@ -57,7 +72,6 @@ func New(c *Config) (Engine, error) {
 		Username: c.Username,
 		Password: c.Password,
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -71,8 +85,10 @@ func New(c *Config) (Engine, error) {
 	}, nil
 }
 
+// Process acts a bootstrapper and the main worker. It sets up
+// the appropiate database table – if it does not exist – reads the
+// migration file, then parses it, then executes the commands that need to run.
 func (e *engine) Process() error {
-
 	if err := e.SetupDatabase(); err != nil {
 		return err
 	}
@@ -89,7 +105,7 @@ func (e *engine) Process() error {
 
 	latest := e.repositories.Migrations.GetLatest()
 
-	var latestVersion *semver
+	var latestVersion Semver
 
 	if latest != nil {
 		latestSemver := newSemver(latest.Version)
@@ -128,7 +144,7 @@ func (e *engine) Process() error {
 	// Then must save the latest version.
 	newLatestVersion := getLatestVersion(commands)
 
-	if err := e.repositories.Migrations.Insert(newLatestVersion.toString()); err != nil {
+	if err := e.repositories.Migrations.Insert(newLatestVersion.ToString()); err != nil {
 		// If there was an error during the insertion of
 		// the new latest version, then should a rollback.
 		// However, it is only possible, if the a transaction was started.
@@ -195,7 +211,7 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 	}
 
 	var (
-		currentVersion *semver
+		currentVersion Semver
 		lineStack      = make([]string, 0)
 		commandStack   = make([]Command, 0)
 	)
@@ -210,15 +226,14 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 
 			lineStack = append(lineStack, line)
 
-			if strings.HasSuffix(strings.TrimSpace(line), ";") && len(lineStack) != 0 {
-				if currentVersion != nil && strings.HasSuffix(strings.TrimSpace(lineStack[len(lineStack)-1]), ";") {
+			if strings.HasSuffix(strings.TrimSpace(line), ";") {
+				if currentVersion != nil {
 					query := strings.Join(lineStack, " ")
 
 					commandStack = append(commandStack, newCommand(e.db, query, currentVersion))
 				}
 
 				lineStack = lineStack[:0]
-
 			}
 
 			continue
@@ -234,17 +249,20 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 		// then, the accumulated stack must be
 		// put into the map with the version string.
 		if currentVersion != nil {
-			commandStack = commandStack[:0]
 			lineStack = lineStack[:0]
 		}
 
-		currentVersion = newSemver(spl[1])
+		sv := newSemver(spl[1])
+		if sv == nil {
+			return nil, ErrBadVersioning
+		}
+		currentVersion = sv
 	}
 
 	return commandStack, nil
 }
 
-func filterCommands(version *semver, commands []Command) []Command {
+func filterCommands(version Semver, commands []Command) []Command {
 	filtered := make([]Command, 0)
 
 	for _, c := range commands {
@@ -273,8 +291,8 @@ func runCommands(commands []Command, withTransaction bool) error {
 	return nil
 }
 
-func getLatestVersion(commands []Command) *semver {
-	var sv *semver
+func getLatestVersion(commands []Command) Semver {
+	var sv Semver
 	for _, c := range commands {
 		if sv == nil {
 			sv = c.Semver()
@@ -282,7 +300,7 @@ func getLatestVersion(commands []Command) *semver {
 			continue
 		}
 
-		if c.Semver().greaterThan(sv) {
+		if c.Semver().GreaterThan(sv) {
 			sv = c.Semver()
 		}
 	}

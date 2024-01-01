@@ -9,7 +9,7 @@ func TestNewSemver(t *testing.T) {
 	type testCase struct {
 		name     string
 		input    string
-		expected *semver
+		expected Semver
 	}
 
 	tt := []testCase{
@@ -102,11 +102,36 @@ func TestGreaterThan(t *testing.T) {
 			sw2:       &semver{major: 1, minor: 1, patch: 2},
 			isGreater: false,
 		},
+
+		{
+			name:      "edge",
+			sw1:       &semver{major: 2, minor: 1, patch: 1},
+			sw2:       &semver{major: 3, minor: 0, patch: 1},
+			isGreater: false,
+		},
+		{
+			name:      "edge-2",
+			sw1:       &semver{major: 3, minor: 0, patch: 1},
+			sw2:       &semver{major: 2, minor: 1, patch: 1},
+			isGreater: true,
+		},
+		{
+			name:      "edge-3",
+			sw1:       &semver{major: 3, minor: 1, patch: 1},
+			sw2:       &semver{major: 3, minor: 0, patch: 1},
+			isGreater: true,
+		},
+		{
+			name:      "edge-4",
+			sw1:       &semver{major: 3, minor: 1, patch: 0},
+			sw2:       &semver{major: 3, minor: 1, patch: 1},
+			isGreater: false,
+		},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.sw1.greaterThan(tc.sw2)
+			got := tc.sw1.GreaterThan(tc.sw2)
 
 			if got != tc.isGreater {
 				t.Errorf("expected to be: %t; got: %t\n", tc.isGreater, got)

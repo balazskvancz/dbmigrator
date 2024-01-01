@@ -16,7 +16,16 @@ type semver struct {
 	patch int
 }
 
-func newSemver(str string) *semver {
+type Semver interface {
+	GreaterThan(s Semver) bool
+	ToString() string
+
+	GetMajor() int
+	GetMinor() int
+	GetPatch() int
+}
+
+func newSemver(str string) Semver {
 	if str == "" {
 		return nil
 	}
@@ -55,22 +64,31 @@ func newSemver(str string) *semver {
 	return sv
 }
 
-func (sv *semver) greaterThan(cmp *semver) bool {
-	if sv.major > cmp.major {
+func (sv *semver) GreaterThan(cmp Semver) bool {
+	if sv.major > cmp.GetMajor() {
 		return true
 	}
 
-	if sv.minor > cmp.minor {
+	if sv.major == cmp.GetMajor() && sv.minor > cmp.GetMinor() {
 		return true
 	}
 
-	if sv.patch > cmp.patch {
+	if sv.major == cmp.GetMajor() && sv.minor == cmp.GetMinor() && sv.patch > cmp.GetPatch() {
 		return true
 	}
 
 	return false
 }
 
-func (sv *semver) toString() string {
+func (sv *semver) ToString() string {
 	return fmt.Sprintf("%d.%d.%d", sv.major, sv.minor, sv.patch)
 }
+
+// GetMajor return the major version of the semver.
+func (sv *semver) GetMajor() int { return sv.major }
+
+// GetMinor return the minor version of the semver.
+func (sv *semver) GetMinor() int { return sv.minor }
+
+// GetPatch return the patch version of the semver.
+func (sv *semver) GetPatch() int { return sv.patch }
