@@ -85,3 +85,5 @@ The corresponding pairs of `environmental variables`:
 - MIGRATIONS_TABLE_NAME
 - MIGRATIONS_FILE_PATH
 - WITH_TRANSACTION
+
+Keep in mind, that this package do not include any drivers (such as "mysql"), so you have to import it within your own tool!
