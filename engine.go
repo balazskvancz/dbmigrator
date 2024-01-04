@@ -53,6 +53,7 @@ type Engine interface {
 	SetupDatabase() error
 	GetLines() ([]string, error)
 	ParseLines(lines []string) ([]Command, error)
+	CloseDatabase()
 }
 
 var (
@@ -314,19 +315,22 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 	return commandStack, nil
 }
 
-// Info
+// Info implements the info branch of logging.
 func (e *engine) Info(line string) {
 	if e.logger != nil {
 		e.Info(line)
 	}
 }
 
-// Error
+// Error implements the error branch of logging.
 func (e *engine) Error(line string) {
 	if e.logger != nil {
 		e.Error(line)
 	}
 }
+
+// CloseDatabase closes the database connection.
+func (e *engine) CloseDatabase() { e.db.Close() }
 
 func filterCommands(version Semver, commands []Command) []Command {
 	filtered := make([]Command, 0)
