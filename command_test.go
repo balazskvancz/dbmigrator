@@ -66,31 +66,71 @@ func TestShouldRun(t *testing.T) {
 		name      string
 		c         Command
 		cmp       Semver
+		dir       direction
 		shouldRun bool
 	}
 
 	tt := []testCase{
 		{
-			name: "the compared version is older = run",
+			name: "the compared version is older = run (up)",
 			c: &command{
 				version: newSemver("2.1.1."),
 			},
 			cmp:       newSemver("1.1.1"),
+			dir:       DirectionUp,
 			shouldRun: true,
 		},
 		{
-			name: "the compared version is older = no run",
+			name: "the compared version is older = no run (down)",
+			c: &command{
+				version: newSemver("2.1.1."),
+			},
+			cmp:       newSemver("1.1.1"),
+			dir:       DirectionDown,
+			shouldRun: false,
+		},
+		{
+			name: "the compared version is newer = no run (up)",
 			c: &command{
 				version: newSemver("1.1.1."),
 			},
 			cmp:       newSemver("1.2.1"),
+			dir:       DirectionUp,
 			shouldRun: false,
+		},
+		{
+			name: "the compared version is newer = no run (down)",
+			c: &command{
+				version: newSemver("1.1.1."),
+			},
+			cmp:       newSemver("1.2.1"),
+			dir:       DirectionDown,
+			shouldRun: false,
+		},
+
+		{
+			name: "the compared version is the same = no run (up)",
+			c: &command{
+				version: newSemver("1.1.1."),
+			},
+			cmp:       newSemver("1.1.1"),
+			dir:       DirectionUp,
+			shouldRun: false,
+		},
+		{
+			name: "the compared version is the same = run (down)",
+			c: &command{
+				version: newSemver("1.1.1."),
+			},
+			cmp:       newSemver("1.1.1"),
+			dir:       DirectionDown,
+			shouldRun: true,
 		},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			shouldRun := tc.c.ShouldRun(tc.cmp)
+			shouldRun := tc.c.ShouldRun(tc.cmp, tc.dir)
 
 			if shouldRun != tc.shouldRun {
 				t.Errorf("expected shouldRun: %t; got: %t\n", tc.shouldRun, shouldRun)

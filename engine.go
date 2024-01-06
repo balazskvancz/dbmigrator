@@ -12,11 +12,19 @@ import (
 	"github.com/balazskvancz/dbmigrator/repositories"
 )
 
+type direction = string
+
 const (
 	versionProlog         string = "#v"
 	singleLineComment     string = "--"
 	multiLineCommentStart string = "/*"
 	multiLineCommentEnd   string = "*/"
+
+	upCommand   string = "#[UP]"
+	downCommand string = "#[DOWN]"
+
+	DirectionUp   direction = "up"
+	DirectionDown direction = "down"
 )
 
 var (
@@ -26,6 +34,9 @@ var (
 	ErrNoFilePath         error = errors.New("missing migrations file path")
 	ErrNothingToRun       error = errors.New("no command to run")
 )
+
+// Basic semver, which holds the minimum version.
+var bottomVersion Semver = newSemver("0.0.0")
 
 type Logger interface {
 	Info(string)
@@ -38,6 +49,7 @@ type engine struct {
 	conf         *Config
 	repositories *repositories.Repositories
 	db           database.Database
+	dir          direction
 }
 
 type EngineOptFunc func(*engine)
@@ -48,12 +60,19 @@ func WithLogger(l Logger) EngineOptFunc {
 	}
 }
 
+func WithDirection(d direction) EngineOptFunc {
+	return func(e *engine) {
+		e.dir = d
+	}
+}
+
 type Engine interface {
-	Process() error
 	SetupDatabase() error
 	GetLines() ([]string, error)
 	ParseLines(lines []string) ([]Command, error)
 	CloseDatabase()
+	Process() error
+	ProcessWithDirection(d direction) error
 }
 
 var (
@@ -105,6 +124,7 @@ func New(c *Config, opts ...EngineOptFunc) (Engine, error) {
 		conf:         c,
 		repositories: rep,
 		db:           db,
+		dir:          DirectionUp,
 	}
 
 	for _, o := range opts {
@@ -112,6 +132,14 @@ func New(c *Config, opts ...EngineOptFunc) (Engine, error) {
 	}
 
 	return e, nil
+}
+
+// ProcessWithDirection is a wrapper to Process. Firstly, it sets
+// the direction, secondly calls Process.
+func (e *engine) ProcessWithDirection(d direction) error {
+	e.dir = d
+
+	return e.Process()
 }
 
 // Process acts a bootstrapper and the main worker. It sets up
@@ -149,11 +177,13 @@ func (e *engine) Process() error {
 
 	if latestVersion == nil {
 		e.Info("-- no prestored migration history --")
+
+		latestVersion = bottomVersion
 	} else {
 		e.Info(fmt.Sprintf("-- prestored migration version: %s", latestVersion.ToString()))
 	}
 
-	filteredCommands := filterCommands(latestVersion, commands)
+	filteredCommands := filterCommands(latestVersion, commands, e.dir)
 
 	if len(filteredCommands) == 0 {
 		return ErrNothingToRun
@@ -165,7 +195,7 @@ func (e *engine) Process() error {
 		}
 	}
 
-	if err := runCommands(e, commands, e.conf.WithTransaction); err != nil {
+	if err := runCommands(e, filteredCommands, e.conf.WithTransaction); err != nil {
 		if e.conf.WithTransaction {
 			if err := e.db.Rollback(); err != nil {
 				return err
@@ -176,7 +206,15 @@ func (e *engine) Process() error {
 	}
 
 	// Then must save the latest version.
-	newLatestVersion := getLatestVersion(commands)
+	newLatestVersion := func() Semver {
+		if e.dir == DirectionUp {
+			return getLatestVersion(commands)
+		}
+
+		// Else we would have to scan for previous version
+		// compared to the stored one.
+		return getPreviousSemver(latestVersion, commands)
+	}()
 
 	if err := e.repositories.Migrations.Insert(newLatestVersion.ToString()); err != nil {
 		// If there was an error during the insertion of
@@ -250,9 +288,25 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 		commandStack   = make([]Command, 0)
 
 		isInsideMultiLineComment = false
+
+		dir direction = DirectionUp
 	)
 
 	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		if line == upCommand {
+			dir = DirectionUp
+
+			continue
+		}
+
+		if line == downCommand {
+			dir = DirectionDown
+
+			continue
+		}
+
 		if !strings.HasPrefix(line, versionProlog) {
 			if idx := strings.Index(line, singleLineComment); idx != -1 {
 				line = line[:idx]
@@ -279,14 +333,15 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 
 			lineStack = append(lineStack, line)
 
-			if strings.HasSuffix(strings.TrimSpace(line), ";") {
+			if strings.HasSuffix(line, ";") {
 				if currentVersion != nil {
 					query := strings.Join(lineStack, " ")
 
-					commandStack = append(commandStack, newCommand(e.db, query, currentVersion))
+					commandStack = append(commandStack, newCommand(e.db, query, currentVersion, dir))
 				}
 
 				lineStack = lineStack[:0]
+
 			}
 
 			continue
@@ -310,6 +365,9 @@ func (e *engine) ParseLines(lines []string) ([]Command, error) {
 			return nil, ErrBadVersioning
 		}
 		currentVersion = sv
+
+		// Setting the direction back to default, whenever a new version is read.
+		dir = DirectionUp
 	}
 
 	return commandStack, nil
@@ -332,11 +390,15 @@ func (e *engine) Error(line string) {
 // CloseDatabase closes the database connection.
 func (e *engine) CloseDatabase() { e.db.Close() }
 
-func filterCommands(version Semver, commands []Command) []Command {
+func filterCommands(version Semver, commands []Command, dir direction) []Command {
 	filtered := make([]Command, 0)
 
 	for _, c := range commands {
-		if version == nil || c.ShouldRun(version) {
+		if c.GetDirection() != dir {
+			continue
+		}
+
+		if version == nil || c.ShouldRun(version, dir) {
 			filtered = append(filtered, c)
 		}
 	}
@@ -360,7 +422,8 @@ func runCommands(logger Logger, commands []Command, withTransaction bool) error 
 }
 
 func getLatestVersion(commands []Command) Semver {
-	var sv Semver
+	var sv Semver = bottomVersion
+
 	for _, c := range commands {
 		if sv == nil {
 			sv = c.Semver()
@@ -372,5 +435,24 @@ func getLatestVersion(commands []Command) Semver {
 			sv = c.Semver()
 		}
 	}
+
+	return sv
+}
+
+func getPreviousSemver(current Semver, commands []Command) Semver {
+	var sv Semver = bottomVersion
+
+	for _, c := range commands {
+		commandSv := c.Semver()
+
+		if current.WouldRollback(commandSv) || commandSv.Equals(current) {
+			continue
+		}
+
+		if commandSv.GreaterThan(sv) {
+			sv = commandSv
+		}
+	}
+
 	return sv
 }

@@ -48,9 +48,9 @@ func TestGetLatestVersion(t *testing.T) {
 
 	tt := []testCase{
 		{
-			name:           "returns nil, in case of empty slice",
+			name:           "returns bottomVersion, in case of empty slice",
 			commands:       []Command{},
-			expectedSemver: nil,
+			expectedSemver: bottomVersion,
 		},
 
 		{
@@ -69,9 +69,7 @@ func TestGetLatestVersion(t *testing.T) {
 			gotSemver := getLatestVersion(tc.commands)
 
 			if !reflect.DeepEqual(gotSemver, tc.expectedSemver) {
-				fmt.Println(gotSemver.ToString())
-				fmt.Println(tc.expectedSemver.ToString())
-				t.Errorf("got not the expected")
+				t.Error("not expected result")
 			}
 		})
 	}
@@ -219,6 +217,56 @@ func TestParseLines(t *testing.T) {
 			},
 			expectedError: nil,
 		},
+
+		{
+			name: "returns multiple commands with #[UP] & #[DOWN] semantics",
+			lines: []string{
+				"",
+				"#v1",
+				"#[UP]",
+				"CREATE TABLE foo (",
+				"id INTEGER NOT NULL,",
+				"",
+				"PRIMARY KEY (id)",
+				");",
+				"",
+				"/*",
+				"multiline comment example",
+				"*/",
+				"ALTER TABLE foo ADD COLUMN bar VARCHAR (10) DEFAULT NULL;",
+				"",
+				"#[DOWN]",
+				"ALTER TABLE DROP foo DROP COLUMN bar;",
+				"",
+				"#v1.2",
+				"#[UP]",
+				"ALTER TABLE foo DROP COLUMN bar;",
+				"",
+				"#[DOWN]",
+				"ALTER TABLE foo ADD COLUMN bar VARCHAR (10) DEFAULT NULL;",
+				"#[UP]",
+				"ALTER TABLE foo ADD COLUMN baz INTEGER NOT NULL;",
+				"",
+				"#v2",
+				"#[UP]",
+				"CREATE TABLE version_2 (",
+				"id INTEGER NOT NULL",
+				");",
+				"#[DOWN]",
+				"DROP TABLE version_2;",
+			},
+			expectedCommands: []Command{
+				newCommand(nil, "CREATE TABLE foo ( id INTEGER NOT NULL, PRIMARY KEY (id) );", newSemver("1"), DirectionUp),
+				newCommand(nil, "ALTER TABLE foo ADD COLUMN bar VARCHAR (10) DEFAULT NULL;", newSemver("1"), DirectionUp),
+				newCommand(nil, "ALTER TABLE DROP foo DROP COLUMN bar;", newSemver("1"), DirectionDown),
+				newCommand(nil, "ALTER TABLE foo DROP COLUMN bar;", newSemver("1.2"), DirectionUp),
+				newCommand(nil, "ALTER TABLE foo ADD COLUMN bar VARCHAR (10) DEFAULT NULL;", newSemver("1.2"), DirectionDown),
+				newCommand(nil, "ALTER TABLE foo ADD COLUMN baz INTEGER NOT NULL;", newSemver("1.2"), DirectionUp),
+				newCommand(nil, "CREATE TABLE version_2 ( id INTEGER NOT NULL );", newSemver("2"), DirectionUp),
+				newCommand(nil, "DROP TABLE version_2;", newSemver("2"), DirectionDown),
+			},
+			expectedError: nil,
+		},
 	}
 
 	for _, tc := range tt {
@@ -243,6 +291,7 @@ func TestFilterCommands(t *testing.T) {
 		name     string
 		version  Semver
 		commands []Command
+		dir      direction
 
 		expectedCommands []Command
 	}
@@ -252,6 +301,7 @@ func TestFilterCommands(t *testing.T) {
 		c2 Command = newCommand(nil, "", newSemver("2.0.1"))
 		c3 Command = newCommand(nil, "", newSemver("3.4.1"))
 		c4 Command = newCommand(nil, "", newSemver("4.1.2"))
+		c5 Command = newCommand(nil, "", newSemver("4.1.2"), DirectionDown)
 	)
 
 	tt := []testCase{
@@ -263,7 +313,9 @@ func TestFilterCommands(t *testing.T) {
 				c2,
 				c3,
 				c4,
+				c5,
 			},
+			dir: DirectionUp,
 			expectedCommands: []Command{
 				c1,
 				c2,
@@ -271,7 +323,6 @@ func TestFilterCommands(t *testing.T) {
 				c4,
 			},
 		},
-
 		{
 			name:    "only the newer commands are returned",
 			version: newSemver("1.5.1"),
@@ -280,14 +331,15 @@ func TestFilterCommands(t *testing.T) {
 				c2,
 				c3,
 				c4,
+				c5,
 			},
+			dir: DirectionUp,
 			expectedCommands: []Command{
 				c2,
 				c3,
 				c4,
 			},
 		},
-
 		{
 			name:    "empty slice is returned, if every command is already done",
 			version: newSemver("4.1.2"),
@@ -296,17 +348,72 @@ func TestFilterCommands(t *testing.T) {
 				c2,
 				c3,
 				c4,
+				c5,
 			},
+			dir:              DirectionUp,
 			expectedCommands: []Command{},
+		},
+		{
+			name:    "only the down command is returned",
+			version: newSemver("4.1.2"),
+			commands: []Command{
+				c1,
+				c2,
+				c3,
+				c4,
+				c5,
+			},
+			dir:              DirectionDown,
+			expectedCommands: []Command{c5},
 		},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			filtered := filterCommands(tc.version, tc.commands)
+			filtered := filterCommands(tc.version, tc.commands, tc.dir)
 
 			if !reflect.DeepEqual(filtered, tc.expectedCommands) {
+				fmt.Println(filtered)
 				t.Error("not expected return value")
+			}
+		})
+	}
+}
+
+func TestGetPreviousSemver(t *testing.T) {
+	type testCase struct {
+		name     string
+		cr       Semver
+		commands []Command
+		prev     Semver
+	}
+
+	tt := []testCase{
+		{
+			name:     "expecting bottomVersion in case of empty slice",
+			cr:       newSemver("1.0.0"),
+			commands: nil,
+			prev:     bottomVersion,
+		},
+		{
+			name: "expecting the right version",
+			cr:   newSemver("1.2.1"),
+			commands: []Command{
+				newCommand(nil, "", newSemver("1.2.1")),
+				newCommand(nil, "", newSemver("1.4.1")),
+				newCommand(nil, "", newSemver("1.3.1")),
+				newCommand(nil, "", newSemver("1.0.1")),
+			},
+			prev: newSemver("1.0.1"),
+		},
+	}
+
+	for _, tc := range tt {
+		t.Run(tc.name, func(t *testing.T) {
+			got := getPreviousSemver(tc.cr, tc.commands)
+
+			if !reflect.DeepEqual(got, tc.prev) {
+				t.Errorf("expected prev semver: %v; got: %v\n", tc.prev, got)
 			}
 		})
 	}

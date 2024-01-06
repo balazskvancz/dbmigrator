@@ -17,8 +17,10 @@ type semver struct {
 }
 
 type Semver interface {
-	GreaterThan(s Semver) bool
+	GreaterThan(Semver) bool
 	ToString() string
+	Equals(Semver) bool
+	WouldRollback(Semver) bool
 
 	GetMajor() int
 	GetMinor() int
@@ -28,6 +30,11 @@ type Semver interface {
 func newSemver(str string) Semver {
 	if str == "" {
 		return nil
+	}
+
+	// Only exception.
+	if str == "0.0.0" {
+		return &semver{}
 	}
 
 	var (
@@ -64,6 +71,8 @@ func newSemver(str string) Semver {
 	return sv
 }
 
+// GreaterThan compares two semvers and returns if the pointer
+// receiver semver is greater than the compared to one.
 func (sv *semver) GreaterThan(cmp Semver) bool {
 	if sv.major > cmp.GetMajor() {
 		return true
@@ -92,3 +101,29 @@ func (sv *semver) GetMinor() int { return sv.minor }
 
 // GetPatch return the patch version of the semver.
 func (sv *semver) GetPatch() int { return sv.patch }
+
+// Equals compares two Semver and returns whether two semvers are equal or not.
+func (sv *semver) Equals(cmp Semver) bool {
+	return (sv.major == cmp.GetMajor() &&
+		sv.minor == cmp.GetMinor() &&
+		sv.patch == cmp.GetPatch())
+}
+
+// WouldRollback compares two Sember and returns whether the compared
+// Semver could be rolled back to.
+func (sv *semver) WouldRollback(cmp Semver) bool {
+	if sv.major < cmp.GetMajor() {
+		return true
+	}
+
+	if sv.major == cmp.GetMajor() && sv.minor < cmp.GetMinor() {
+		return true
+	}
+
+	if sv.major == cmp.GetMajor() && sv.minor == cmp.GetMinor() && sv.patch < cmp.GetPatch() {
+		return true
+	}
+
+	return false
+
+}
