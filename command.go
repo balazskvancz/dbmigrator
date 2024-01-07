@@ -13,7 +13,7 @@ type command struct {
 
 type Command interface {
 	Run() error
-	ShouldRun(Semver, direction) bool
+	ShouldRun(Semver, direction, Semver) bool
 	Semver() Semver
 	GetDirection() direction
 }
@@ -42,8 +42,18 @@ func (c *command) Run() error {
 }
 
 // ShouldRun returns whether a certain command should run based upon
-// the latest stored versions.
-func (c *command) ShouldRun(version Semver, dir direction) bool {
+// the latest stored version, direction and target version.
+func (c *command) ShouldRun(version Semver, dir direction, target Semver) bool {
+	// In case of given target version, have to make sure, that
+	// the commands version is in the appropriate interval.
+	if target != nil {
+		if dir == DirectionUp {
+			return c.version.GreaterThan(version) && !c.version.GreaterThan(target)
+		}
+
+		return !c.version.GreaterThan(version) && c.version.GreaterThan(target)
+	}
+
 	// In case of down direction, only those semvers
 	// should run which are equal to the current version
 	if dir == DirectionDown {

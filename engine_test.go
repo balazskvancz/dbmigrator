@@ -292,6 +292,7 @@ func TestFilterCommands(t *testing.T) {
 		version  Semver
 		commands []Command
 		dir      direction
+		target   Semver
 
 		expectedCommands []Command
 	}
@@ -370,7 +371,7 @@ func TestFilterCommands(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			filtered := filterCommands(tc.version, tc.commands, tc.dir)
+			filtered := filterCommands(tc.version, tc.commands, tc.dir, tc.target)
 
 			if !reflect.DeepEqual(filtered, tc.expectedCommands) {
 				fmt.Println(filtered)

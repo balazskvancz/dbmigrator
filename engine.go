@@ -46,39 +46,52 @@ type Logger interface {
 type engine struct {
 	logger Logger
 
-	conf         *Config
-	repositories *repositories.Repositories
-	db           database.Database
-	dir          direction
+	conf          *Config
+	repositories  *repositories.Repositories
+	db            database.Database
+	dir           direction
+	targetVersion Semver
 }
 
 type EngineOptFunc func(*engine)
 
-func WithLogger(l Logger) EngineOptFunc {
-	return func(e *engine) {
-		e.logger = l
-	}
-}
-
-func WithDirection(d direction) EngineOptFunc {
-	return func(e *engine) {
-		e.dir = d
-	}
-}
-
 type Engine interface {
 	SetupDatabase() error
 	GetLines() ([]string, error)
-	ParseLines(lines []string) ([]Command, error)
+	ParseLines([]string) ([]Command, error)
 	CloseDatabase()
 	Process() error
-	ProcessWithDirection(d direction) error
+	ProcessWithDirection(direction) error
+	ProcessWithTargetVersion(string) error
 }
 
 var (
 	_ Engine = (*engine)(nil)
 	_ Logger = (*engine)(nil)
 )
+
+// WithLogger attaches the given logger entity to the engine instance.
+func WithLogger(l Logger) EngineOptFunc {
+	return func(e *engine) {
+		e.logger = l
+	}
+}
+
+// WithDirection sets the given direction to the engine instance.
+func WithDirection(d direction) EngineOptFunc {
+	return func(e *engine) {
+		e.dir = d
+	}
+}
+
+// WithTargetVersion sets the given target version to the engine instance.
+func WithTargetVersion(v string) EngineOptFunc {
+	return func(e *engine) {
+		if sv := newSemver(v); sv != nil {
+			e.targetVersion = sv
+		}
+	}
+}
 
 // NewFromJsonConfig creates a new instance from the config at the given path.
 func NewFromJsonConfig(path string, opts ...EngineOptFunc) (Engine, error) {
@@ -139,6 +152,30 @@ func New(c *Config, opts ...EngineOptFunc) (Engine, error) {
 func (e *engine) ProcessWithDirection(d direction) error {
 	e.dir = d
 
+	// Resetting the direction back to default.
+	defer func() {
+		e.dir = DirectionUp
+	}()
+
+	return e.Process()
+}
+
+// ProcessWithTargetVersion is a wrapper to Process. Firstly, it sets
+// the desired version, secondly calls Process.
+func (e *engine) ProcessWithTargetVersion(v string) error {
+	sv := newSemver(v)
+	if sv == nil {
+		return ErrBadVersioning
+	}
+
+	e.targetVersion = sv
+
+	// Making sure to reset the version in case
+	// of the engine instance reuse.
+	defer func() {
+		e.targetVersion = nil
+	}()
+
 	return e.Process()
 }
 
@@ -160,30 +197,30 @@ func (e *engine) Process() error {
 		return err
 	}
 
-	latest := e.repositories.Migrations.GetLatest()
+	current := e.repositories.Migrations.GetLatest()
 
-	var latestVersion Semver
+	var currentVersion Semver
 
-	if latest != nil {
-		latestSemver := newSemver(latest.Version)
+	if current != nil {
+		latestSemver := newSemver(current.Version)
 
 		// In this case the stored latest version is somehow invalid.
 		if latestSemver == nil {
 			return ErrInvalidLastVersion
 		}
 
-		latestVersion = latestSemver
+		currentVersion = latestSemver
 	}
 
-	if latestVersion == nil {
+	if currentVersion == nil {
 		e.Info("-- no prestored migration history --")
 
-		latestVersion = bottomVersion
+		currentVersion = bottomVersion
 	} else {
-		e.Info(fmt.Sprintf("-- prestored migration version: %s", latestVersion.ToString()))
+		e.Info(fmt.Sprintf("-- prestored migration version: %s", currentVersion.ToString()))
 	}
 
-	filteredCommands := filterCommands(latestVersion, commands, e.dir)
+	filteredCommands := filterCommands(currentVersion, commands, e.dir, e.targetVersion)
 
 	if len(filteredCommands) == 0 {
 		return ErrNothingToRun
@@ -213,7 +250,7 @@ func (e *engine) Process() error {
 
 		// Else we would have to scan for previous version
 		// compared to the stored one.
-		return getPreviousSemver(latestVersion, commands)
+		return getPreviousSemver(currentVersion, commands)
 	}()
 
 	if err := e.repositories.Migrations.Insert(newLatestVersion.ToString()); err != nil {
@@ -390,7 +427,12 @@ func (e *engine) Error(line string) {
 // CloseDatabase closes the database connection.
 func (e *engine) CloseDatabase() { e.db.Close() }
 
-func filterCommands(version Semver, commands []Command, dir direction) []Command {
+func filterCommands(
+	version Semver,
+	commands []Command,
+	dir direction,
+	targetVersion Semver,
+) []Command {
 	filtered := make([]Command, 0)
 
 	for _, c := range commands {
@@ -398,7 +440,7 @@ func filterCommands(version Semver, commands []Command, dir direction) []Command
 			continue
 		}
 
-		if version == nil || c.ShouldRun(version, dir) {
+		if version == nil || c.ShouldRun(version, dir, targetVersion) {
 			filtered = append(filtered, c)
 		}
 	}
