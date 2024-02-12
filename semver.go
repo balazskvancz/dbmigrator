@@ -37,6 +37,12 @@ func newSemver(str string) Semver {
 		return &semver{}
 	}
 
+	// If the given string was eg: v1.0.0,
+	// then we should strip the v from it.
+	if str[0] == 'v' {
+		str = str[1:]
+	}
+
 	var (
 		sv  = &semver{}
 		spl = strings.Split(str, versionSeparator)

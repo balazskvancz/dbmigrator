@@ -220,6 +220,12 @@ func (e *engine) Process() error {
 		e.Info(fmt.Sprintf("-- prestored migration version: %s", currentVersion.ToString()))
 	}
 
+	// If the given target version is smaller than the latest version,
+	// we manually have to set the direction.
+	if e.targetVersion != nil && currentVersion.GreaterThan(e.targetVersion) {
+		e.dir = DirectionDown
+	}
+
 	filteredCommands := filterCommands(currentVersion, commands, e.dir, e.targetVersion)
 
 	if len(filteredCommands) == 0 {
@@ -244,6 +250,10 @@ func (e *engine) Process() error {
 
 	// Then must save the latest version.
 	newLatestVersion := func() Semver {
+		if e.targetVersion != nil {
+			return e.targetVersion
+		}
+
 		if e.dir == DirectionUp {
 			return getLatestVersion(commands)
 		}
